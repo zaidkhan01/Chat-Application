@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'path';
 import authRoute from './route/auth.route.js';
 import messageRoute from './route/message.route.js';
+import { connectDB } from './lib/db.js';
 dotenv.config();
 
 const app = express();
@@ -10,6 +11,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 console.log(PORT);
 
+
+app.use(express.json()); // this ia middleware to parse the body of the request
 app.use("/api/auth",authRoute);
 app.use("api/message",messageRoute);
 // for production build we are using the dist folder
@@ -18,5 +21,8 @@ if(process.env.NODE_ENV === "production"){
 
     app.get("*", (_,res)=> res.sendFile(path.join(__dirname,"../frontend/dist/index.html")));
 }
-app.listen(3000,()=> console.log("server running at port 3000"));
+app.listen(PORT,()=> {
+    console.log("server running at port 3000")
+    connectDB();
+});
 
