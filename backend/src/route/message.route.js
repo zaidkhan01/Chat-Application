@@ -5,4 +5,4 @@ router.get("/",(req,res)=>{
     res.send("message endpoint");
 });
 
-export default router;
+export default router; 

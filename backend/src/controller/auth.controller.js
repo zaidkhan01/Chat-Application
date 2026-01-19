@@ -1,6 +1,8 @@
 import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
+import { sendWelcomeEmail } from '../emails/emailHandlers.js';
 import { generateToken } from '../lib/utlis.js';
+import { ENV } from '../lib/env.js';
 
 export const signup = async (req,res) => {
    const {fullName, email, password}= req.body;
@@ -29,15 +31,23 @@ export const signup = async (req,res) => {
         password:hashedPassword,
     });
    if(newUser){
-    generateToken(newUser._id,res);
-    await newUser.save();
-   res.status(201).json({
+   
+const savedUser = await newUser.save();
+generateToken(savedUser._id,res);
+
+   res.status(201).json({   
     _id:newUser._id,
     fullName:newUser.fullName,
     email:newUser.email,
     profilePic:newUser.profilePic,
    }
 )
+    try{
+        await sendWelcomeEmail(savedUser.email, savedUser.fullName, ENV.CLIENT_URL);
+
+    }catch(error){
+        console.error("Error sending welcome email:", error);
+    }
 }else{
     res.status(400).json({message:"Invalid user data"});
 }
@@ -56,11 +66,11 @@ export const login = async (req,res) => {
 
     const user = await User.findOne({email});
     if(!user){
-        return res.status(400).json({message:"User not found"});
+        return res.status(400).json({message:"Invalid credentials"});
     }
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
     if(!isPasswordCorrect){
-        return res.status(400).json({message:"Invalid password"});
+        return res.status(400).json({message:"Invalid credentials"});
     }
     generateToken(user._id,res);
     res.status(200).json({
