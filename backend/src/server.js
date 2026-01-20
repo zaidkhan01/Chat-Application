@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import authRoute from './route/auth.route.js';
 import messageRoute from './route/message.route.js';
@@ -11,7 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 console.log(PORT);
 
-
+app.use(cookieParser());
 app.use(express.json()); // this ia middleware to parse the body of the request
 app.use("/api/auth",authRoute);
 app.use("api/message",messageRoute);
