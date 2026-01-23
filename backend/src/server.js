@@ -15,7 +15,7 @@ console.log(PORT);
 app.use(cookieParser());
 app.use(express.json()); // this ia middleware to parse the body of the request
 app.use("/api/auth",authRoute);
-app.use("api/message",messageRoute);
+app.use("/api/messages",messageRoute);
 // for production build we are using the dist folder
 if(process.env.NODE_ENV === "production"){
     app.use(express.static(path.join(__dirname,"../frontend/dist")));
