@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { axiosInstance } from "../lib/axios";
 import toast from "react-hot-toast";
 import { useAuthStore } from "./UseAuthStore";
+import { io } from "socket.io-client";
 
 export const useChatStore = create((set, get) => ({
   allContacts: [],
@@ -76,10 +77,15 @@ export const useChatStore = create((set, get) => ({
 
     try {
       const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
-      set({ messages: messages.concat(res.data) });
+
+      const currentMessages = get().messages;
+      const filteredMessages = currentMessages.filter(msg => msg._id !== tempId);   
+      set({ messages: [...filteredMessages, res.data] });
     } catch (error) {
       // remove optimistic message on failure
-      set({ messages: messages });
+      const currentMessages = get().messages;
+      const filteredMessages = currentMessages.filter(msg => msg._id !== tempId);
+    set({ messages: filteredMessages });
       toast.error(error.response?.data?.message || "Something went wrong");
     }
   },
@@ -87,20 +93,45 @@ export const useChatStore = create((set, get) => ({
   subscribeToMessages: () => {
     const { selectedUser, isSoundEnabled } = get();
     if (!selectedUser) return;
-
+  
     const socket = useAuthStore.getState().socket;
-
+    const authUser = useAuthStore.getState().authUser;  // Add this line
+    
+    if (!socket || !socket.connected) {
+      console.warn("Socket not connected");
+      return;
+    }
+  
+    // Remove existing listener first to avoid duplicates
+    socket.off("newMessage");
+  
     socket.on("newMessage", (newMessage) => {
-      const isMessageSentFromSelectedUser = newMessage.senderId === selectedUser._id;
-      if (!isMessageSentFromSelectedUser) return;
-
+      const currentSelectedUser = get().selectedUser;
+      if (!currentSelectedUser || !authUser) return;
+      
+      // Convert ObjectIds to strings for comparison
+      const messageSenderId = newMessage.senderId?.toString();
+      const messageReceiverId = newMessage.receiverId?.toString();
+      const selectedUserId = currentSelectedUser._id?.toString();
+      const currentUserId = authUser._id?.toString();
+      
+      // Check if message is for the current conversation
+      const isMessageForCurrentChat = 
+        (messageSenderId === selectedUserId && messageReceiverId === currentUserId) ||
+        (messageReceiverId === selectedUserId && messageSenderId === currentUserId);
+      
+      if (!isMessageForCurrentChat) return;
+  
       const currentMessages = get().messages;
+      // Check if message already exists (avoid duplicates)
+      const messageExists = currentMessages.some(msg => msg._id?.toString() === newMessage._id?.toString());
+      if (messageExists) return;
+  
       set({ messages: [...currentMessages, newMessage] });
-
+  
       if (isSoundEnabled) {
         const notificationSound = new Audio("/sounds/notification.mp3");
-
-        notificationSound.currentTime = 0; // reset to start
+        notificationSound.currentTime = 0;
         notificationSound.play().catch((e) => console.log("Audio play failed:", e));
       }
     });

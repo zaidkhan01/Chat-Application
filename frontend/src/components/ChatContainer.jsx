@@ -19,6 +19,14 @@ function ChatContainer() {
   const messageEndRef = useRef(null);
 
   useEffect(() => {
+    if (!selectedUser) return;
+  
+    const socket = useAuthStore.getState().socket;
+    if (!socket || !socket.connected) {
+      console.warn("Socket not connected, attempting to connect...");
+      useAuthStore.getState().connectSocket();
+    }
+    
     getMessagesByUserId(selectedUser._id);
     subscribeToMessages();
 
@@ -57,19 +65,19 @@ function ChatContainer() {
                   <p className="text-xs mt-1 opacity-75 flex items-center gap-1">
                     {new Date(msg.createdAt).toLocaleTimeString(undefined, {
                       hour: "2-digit",
-                      minute: "2-digit",
+                      minute: "2-digit",    
                     })}
                   </p>
                 </div>
               </div>
             ))}
-            {/* 👇 scroll target */}
+            {/* 👇 scroll target */}    
             <div ref={messageEndRef} />
           </div>
         ) : isMessagesLoading ? (
           <MessagesLoadingSkeleton />
         ) : (
-          <NoChatHistoryPlaceholder name={selectedUser.fullName} />
+          <NoChatHistoryPlaceholder name={selectedUser.fullName} /> 
         )}
       </div>
 

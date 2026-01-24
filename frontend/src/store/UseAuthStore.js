@@ -1,12 +1,17 @@
 import { create } from 'zustand';
 import { axiosInstance } from '../lib/axios';
 import { toast } from 'react-hot-toast';
+import { io } from 'socket.io-client';
+
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 export const useAuthStore = create((set,get) => ({
    authUser:null,
    isCheckingAuth:true,
    isSigningUp:false,
    isLoggingIn:false,
    isLoggingOut:false,
+   socket:null,
+   onlineUsers:[],
    checkAuth:async () => {
     try{
         const response = await axiosInstance.get("/auth/check");
@@ -40,7 +45,7 @@ export const useAuthStore = create((set,get) => ({
       set({ authUser: res.data });
 
       toast.success("Account created successfully!");
-    //   get().connectSocket();
+      get().connectSocket();
     } catch (error) {
       console.error("signup error:", error);
       toast.error(error.response?.data?.message);
@@ -55,6 +60,7 @@ export const useAuthStore = create((set,get) => ({
         const response = await axiosInstance.post("/auth/login", data);
         set({authUser:response.data});
         toast.success("Login successful");
+        get().connectSocket();
     }catch(error){
         toast.error(error.response.data.message);
         
@@ -69,6 +75,7 @@ export const useAuthStore = create((set,get) => ({
             await axiosInstance.post("/auth/logout");
             set({ authUser: null });
             toast.success("Logged out successfully");
+            get().disconnectSocket();
         }catch(error){
             toast.error(error.response.data.message);
         }finally{
@@ -86,5 +93,25 @@ export const useAuthStore = create((set,get) => ({
         }finally{
             set({ isUpdatingProfile: false });
         }
-    }
+    },
+    connectSocket:() => {
+        const {authUser} = get();
+        if(!authUser || get().socket?.connected) return;
+
+        const socket = io(BASE_URL,{
+            withCredentials:true,
+        });
+        socket.connect();
+        set({socket});
+        //listen to events of online user from client
+        socket.on("getOnlineUsers",(userIds) => {
+            set({onlineUsers:userIds});
+        });
+    },
+    disconnectSocket:() => {
+       if(get().socket?.connected){
+        get().socket.disconnect();
+        
+       }
+    },
 }));
