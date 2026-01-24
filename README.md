@@ -213,3 +213,233 @@ The flow includes error handling for:
 - JWT tokens are stored as HTTP-only cookies
 - Tokens are automatically sent with subsequent requests
 - Protected routes verify tokens via middleware
+
+## Message Sending and Receiving Flow
+
+### Detailed Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant Sender as Sender User
+    participant MessageInput as MessageInput.jsx
+    participant ChatStore as useChatStore<br/>(Zustand)
+    participant Axios as axiosInstance
+    participant BackendServer as Express Server
+    participant AuthMiddleware as Auth Middleware
+    participant MessageController as sendMessage Controller
+    participant Cloudinary as Cloudinary API
+    participant Database as MongoDB
+    participant SocketIO as Socket.IO Server
+    participant ReceiverSocket as Receiver Socket
+    participant ReceiverStore as Receiver useChatStore
+    participant ReceiverUI as Receiver ChatContainer
+
+    Note over Sender,ReceiverUI: === SENDER SIDE FLOW ===
+    
+    Sender->>MessageInput: Types message / selects image
+    Sender->>MessageInput: Clicks send button
+    MessageInput->>MessageInput: handleSendMessage()<br/>Validates input
+    MessageInput->>ChatStore: sendMessage({text, image})
+    
+    Note over ChatStore: Optimistic Update
+    ChatStore->>ChatStore: Create optimistic message<br/>(temp ID, immediate UI update)
+    ChatStore->>ReceiverUI: UI updates instantly<br/>(sender sees message)
+    
+    ChatStore->>Axios: POST("/messages/send/:receiverId", messageData)
+    
+    Note over Axios: baseURL: "http://localhost:3000/api"<br/>withCredentials: true<br/>Includes JWT cookie
+    
+    Axios->>BackendServer: HTTP POST<br/>/api/messages/send/:receiverId<br/>Body: {text, image}<br/>Headers: Cookie (JWT)
+    
+    BackendServer->>AuthMiddleware: Verify JWT token
+    AuthMiddleware->>BackendServer: Authentication successful<br/>req.user = authenticated user
+    
+    BackendServer->>MessageController: sendMessage(req, res)
+    
+    MessageController->>MessageController: Validate: text or image required
+    MessageController->>MessageController: Validate: senderId ≠ receiverId
+    MessageController->>Database: User.exists({_id: receiverId})
+    
+    alt Receiver not found
+        Database->>MessageController: User not found
+        MessageController->>BackendServer: 400 "Receiver not found"
+        BackendServer->>Axios: 400 Error Response
+        Axios->>ChatStore: Error response
+        ChatStore->>ChatStore: Remove optimistic message
+        ChatStore->>Sender: Show error toast
+    else Receiver exists
+        Database->>MessageController: Receiver exists
+        
+        alt Image provided
+            MessageController->>Cloudinary: upload(image)
+            Cloudinary->>MessageController: secure_url
+            MessageController->>MessageController: imageUrl = secure_url
+        end
+        
+        MessageController->>Database: new Message({<br/>senderId, receiverId,<br/>text, image: imageUrl<br/>})
+        MessageController->>Database: message.save()
+        Database->>MessageController: Saved message object
+        
+        MessageController->>SocketIO: getReceiverSocketId(receiverId)
+        SocketIO->>MessageController: receiverSocketId (if online)
+        
+        alt Receiver is online
+            MessageController->>SocketIO: io.to(receiverSocketId)<br/>.emit("newMessage", message)
+            SocketIO->>ReceiverSocket: Socket event: "newMessage"
+        else Receiver is offline
+            Note over SocketIO: Message saved to DB<br/>Receiver will see it when online
+        end
+        
+        MessageController->>BackendServer: 201 Created<br/>Response: message object
+        BackendServer->>Axios: 201 Response
+        Axios->>ChatStore: Success response with message
+        
+        ChatStore->>ChatStore: Replace optimistic message<br/>with real message from server
+        ChatStore->>Sender: UI updates with final message
+    end
+
+    Note over Sender,ReceiverUI: === RECEIVER SIDE FLOW ===
+    
+    Note over ReceiverSocket: Socket connection established<br/>on login/chat open
+    
+    ReceiverSocket->>ReceiverStore: subscribeToMessages()<br/>Sets up "newMessage" listener
+    
+    alt Message received via socket
+        SocketIO->>ReceiverSocket: emit("newMessage", message)
+        ReceiverSocket->>ReceiverStore: socket.on("newMessage")<br/>Event triggered
+        
+        ReceiverStore->>ReceiverStore: Check if message is for<br/>current conversation
+        ReceiverStore->>ReceiverStore: Check for duplicates
+        
+        alt Message is for current chat & not duplicate
+            ReceiverStore->>ReceiverStore: Add message to messages array
+            ReceiverStore->>ReceiverUI: State update triggers re-render
+            ReceiverUI->>ReceiverUI: Display new message
+            
+            alt Sound enabled
+                ReceiverStore->>ReceiverStore: Play notification sound
+            end
+        else Message not for current chat
+            Note over ReceiverStore: Message ignored<br/>(different conversation)
+        end
+    end
+
+    Note over Sender,ReceiverUI: === PERSISTENCE ===
+    
+    Note over Database: All messages saved to MongoDB<br/>Available on page reload
+    ReceiverUI->>ChatStore: getMessagesByUserId(userId)
+    ChatStore->>Axios: GET("/messages/:userId")
+    Axios->>BackendServer: HTTP GET /api/messages/:userId
+    BackendServer->>MessageController: getMessagesByUserId(req, res)
+    MessageController->>Database: Message.find({<br/>$or: [<br/>  {senderId, receiverId},<br/>  {receiverId, senderId}<br/>]<br/>})
+    Database->>MessageController: All messages between users
+    MessageController->>BackendServer: 200 OK with messages array
+    BackendServer->>Axios: 200 Response
+    Axios->>ChatStore: Messages array
+    ChatStore->>ReceiverUI: Display all messages
+```
+
+### Simplified High-Level Flow
+
+```mermaid
+sequenceDiagram
+    participant S as Sender
+    participant SF as Sender Frontend
+    participant B as Backend
+    participant D as Database
+    participant SO as Socket.IO
+    participant RF as Receiver Frontend
+    participant R as Receiver
+
+    Note over S,R: Sending Message
+    
+    S->>SF: Type & send message
+    SF->>SF: Optimistic update<br/>(instant UI)
+    SF->>B: POST /messages/send/:id
+    B->>B: Validate & save
+    B->>D: Save message
+    D->>B: Message saved
+    B->>SO: Emit to receiver
+    B->>SF: 201 Response
+    SF->>SF: Replace with real message
+    
+    Note over S,R: Receiving Message
+    
+    SO->>RF: Socket event "newMessage"
+    RF->>RF: Add to messages
+    RF->>R: Display message
+    R->>R: See new message
+```
+
+### Flow Description
+
+#### 1. Sender Side - Message Composition
+- **MessageInput.jsx**: User types message or selects image
+- Form validation ensures text or image is provided
+- On submit, calls `sendMessage()` from `useChatStore`
+
+#### 2. Optimistic Update
+- **useChatStore**: Immediately creates a temporary message with a temp ID
+- UI updates instantly, showing the message to the sender
+- Provides instant feedback while waiting for server response
+
+#### 3. HTTP Request to Backend
+- POST request to `/api/messages/send/:receiverId`
+- Includes JWT cookie for authentication
+- Request body contains `{text, image}`
+
+#### 4. Backend Processing
+- **Auth Middleware**: Verifies JWT token
+- **Message Controller**: Validates input (text or image required)
+- Checks receiver exists and is not the same as sender
+- If image provided, uploads to Cloudinary
+- Creates and saves message to MongoDB
+
+#### 5. Real-Time Delivery via Socket.IO
+- Backend looks up receiver's socket ID from `userSocketMap`
+- If receiver is online, emits `"newMessage"` event via Socket.IO
+- If receiver is offline, message is saved and will be retrieved when they come online
+
+#### 6. Receiver Side - Real-Time Update
+- **Socket Connection**: Established when user logs in or opens chat
+- **subscribeToMessages()**: Sets up listener for `"newMessage"` events
+- When message arrives, validates it's for the current conversation
+- Checks for duplicates to prevent duplicate messages
+- Updates messages array, triggering UI re-render
+- Plays notification sound if enabled
+
+#### 7. Message Persistence
+- All messages are saved to MongoDB
+- When user opens a conversation, `getMessagesByUserId()` fetches all historical messages
+- Messages are displayed in chronological order
+
+### Key Components
+
+#### Frontend
+- **MessageInput.jsx**: Message composition component
+- **useChatStore.js**: Zustand store managing messages and real-time subscriptions
+- **ChatContainer.jsx**: Displays messages and handles socket subscriptions
+- **UseAuthStore.js**: Manages socket connection
+
+#### Backend
+- **message.controller.js**: Handles message sending, validation, and database operations
+- **message.route.js**: Routes for message endpoints
+- **socket.js**: Socket.IO server setup and user socket mapping
+- **cloudinary.js**: Image upload service
+
+### Real-Time Features
+
+1. **Optimistic Updates**: Instant UI feedback for sender
+2. **Socket.IO Integration**: Real-time message delivery to online users
+3. **Offline Support**: Messages saved to database for offline users
+4. **Duplicate Prevention**: Checks prevent duplicate messages in UI
+5. **Sound Notifications**: Optional audio notifications for new messages
+
+### Error Handling
+
+The flow includes error handling for:
+- **Validation errors**: Missing text/image, sending to self
+- **Receiver not found**: Invalid receiver ID
+- **Network errors**: Backend unavailable, socket disconnection
+- **Image upload failures**: Cloudinary upload errors
+- **Optimistic update rollback**: Removes temporary message on failure
